@@ -27,6 +27,7 @@
 
 var config = require('./config');
 var serialport = require("serialport");
+var SerialPort = serialport.SerialPort; // localize object constructor
 var app = require('http').createServer(handler)
   , io = require('socket.io').listen(app)
   , fs = require('fs');
@@ -94,6 +95,10 @@ var sp = [];
 var allPorts = [];
 
 serialport.list(function (err, ports) {
+	if (fs.existsSync('/dev/ttyAMA0') && config.usettyAMA0 == 1) {
+	  (ports = ports || []).push({comName:'/dev/ttyAMA0',manufacturer: undefined,pnpId: 'raspberryPi__GPIO'});
+	  console.log('adding /dev/ttyAMA0 because it is enabled in config.js, you may need to enable it in the os - http://www.hobbytronics.co.uk/raspberry-pi-serial-port');
+	}
 
 	// if on rPi - http://www.hobbytronics.co.uk/raspberry-pi-serial-port
 
@@ -109,33 +114,28 @@ serialport.list(function (err, ports) {
 		sp[i].lastSerialWrite = [];
 		sp[i].lastSerialReadLine = '';
 		// read on the parser
-		sp[i].handle = new serialport.parsers.Readline({delimiter: '\r\n'});
-		// 1 means clear to send, 0 means waiting for response
-		sp[i].port = new serialport(ports[i].comName, {
-			baudRate: config.serialBaudRate
+		sp[i].handle = new SerialPort(ports[i].comName, {
+			parser: serialport.parsers.readline("\n"),
+			baudrate: config.serialBaudRate
 		});
-		// write on the port
-		sp[i].port.pipe(sp[i].handle);
 		sp[i].sockets = [];
 
-		sp[i].port.on("open", function() {
+		sp[i].handle.on("open", function() {
 
-			console.log('connected at '+config.serialBaudRate, sp[i].port.path);
+			console.log('connected to '+sp[i].port+' at '+config.serialBaudRate);
+
+			// line from serial port
+			sp[i].handle.on("data", function (data) {
+				serialData(data, i);
+			});
 
 			// loop for status ?
 			setInterval(function() {
-				//console.log('writing ? to serial');
-				sp[i].port.write('?');
+				// console.log('writing ? to serial');
+				sp[i].handle.write('?');
 			}, 1000);
 
 		});
-
-		// line from serial port
-		sp[i].handle.on("data", function (data) {
-			//console.log('got data', data);
-			serialData(data, i);
-		});
-
 	}(i)
 	}
 
@@ -247,7 +247,7 @@ function sendFirstQ(port) {
 	for (var i=0; i<sp[port].sockets.length; i++) {
 		sp[port].sockets[i].emit('serialRead', {'line':'<span style="color: black;">SEND: '+t+'</span>'+"\n"});
 	}
-	sp[port].port.write(t+"\n")
+	sp[port].handle.write(t+"\n")
 	sp[port].lastSerialWrite.push(t);
 }
 
@@ -260,7 +260,7 @@ io.sockets.on('connection', function (socket) {
 	// do soft reset, this has it's own clear and direct function call
 	socket.on('doReset', function (data) {
 		// soft reset for grbl, send ctrl-x ascii \030
-		sp[currentSocketPort[socket.id]].port.write("\030");
+		sp[currentSocketPort[socket.id]].handle.write("\030");
 		// reset vars
 		sp[currentSocketPort[socket.id]].q = [];
 		sp[currentSocketPort[socket.id]].qCurrentMax = 0;
